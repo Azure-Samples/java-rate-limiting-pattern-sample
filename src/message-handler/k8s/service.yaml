@@ -1,0 +1,37 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: handler-service
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: handler-service
+  template:
+    metadata:
+      labels:
+        app: handler-service
+    spec:
+      containers:
+      - name: handler-service
+        image: handler-service-image
+        env:
+          - name: RATE_LIMITING_SERVICE_URL
+            value: "http://rate-limiting-api:8081"
+          - name: SERVICE_BUS_CONNECTION_STRING
+            valueFrom:
+              secretKeyRef:
+                name: service-bus-secrets
+                key: SERVICE_BUS_CONNECTION_STRING
+          - name: SERVICE_BUS_TOPIC_NAME
+            valueFrom:
+              secretKeyRef:
+                name: service-bus-secrets
+                key: SERVICE_BUS_TOPIC_NAME
+          - name: SERVICE_BUS_SUBSCRIPTION_NAME
+            valueFrom:
+              secretKeyRef:
+                name: service-bus-secrets
+                key: SERVICE_BUS_SUBSCRIPTION_NAME
+          - name: AZURE_LOG_LEVEL
+            value: "ERROR"

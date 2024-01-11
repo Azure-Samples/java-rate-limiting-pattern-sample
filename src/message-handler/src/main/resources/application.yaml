@@ -1,0 +1,14 @@
+spring:
+    config:
+        activate:
+            on-profile: sample
+
+server:
+    port : 8082
+
+rateLimitingServiceUrl: ${RATE_LIMITING_SERVICE_URL}
+
+servicebus:
+    connectionString: ${SERVICE_BUS_CONNECTION_STRING}
+    topicName: ${SERVICE_BUS_TOPIC_NAME}
+    subscriptionName: ${SERVICE_BUS_SUBSCRIPTION_NAME}

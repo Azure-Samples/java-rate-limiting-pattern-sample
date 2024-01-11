@@ -1,0 +1,8 @@
+## {{$dotenv variableName}}: Returns the environment value stored in the .env file which exists in the same directory of your .http file.
+
+POST {{$dotenv APIM_URL}}/topics/messages
+
+{
+    "message": "Hello World",
+    "sessionId": "123456"
+}

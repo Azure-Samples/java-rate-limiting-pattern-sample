@@ -1,0 +1,14 @@
+spring:
+    config:
+        activate:
+            on-profile: sample
+
+server:
+    port : 8081
+
+ratelimit:
+    # Number of requests allowed in a given time window
+    capacity: 300
+
+    # Time window in minutes
+    duration: 1

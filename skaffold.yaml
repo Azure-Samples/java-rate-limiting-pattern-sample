@@ -1,0 +1,22 @@
+apiVersion: skaffold/v4beta6
+kind: Config
+metadata:
+  name: rate-limiting-sample
+build:
+  artifacts:
+    - image: handler-service-image
+      context: src/message-handler
+      buildpacks:
+        builder: "gcr.io/buildpacks/builder:v1"
+        env:
+        - GOOGLE_RUNTIME_VERSION=17
+    - image: rate-limiting-api-image
+      context: src/rate-limiting-api
+      buildpacks:
+        builder: "gcr.io/buildpacks/builder:v1"
+        env:
+        - GOOGLE_RUNTIME_VERSION=17
+manifests:
+  rawYaml:
+    - src/message-handler/k8s/service.yaml
+    - src/rate-limiting-api/k8s/service.yaml
