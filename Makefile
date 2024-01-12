@@ -34,10 +34,14 @@ setup-local-env: ## 🛠️ setup local environment variables
 setup-local-cluster: ## 🛠️ setup local cluster
 	echo "Starting local cluster setup"
 	minikube start -p rate-limiting-sample
+
+	echo "Deploying Redis"
+	helm repo add bitnami https://charts.bitnami.com/bitnami
+	helm install redis -n default --set architecture=standalone bitnami/redis
 	echo "Done."
 
 setup-local-cluster-secret: ## 🛠️ setup local cluster secret
-	echo "Creating secret for the connection string"
+	echo "Creating secret for the service bus connection string"
 	kubectl create secret generic service-bus-secrets --from-env-file=.env
 	echo "Done."
 

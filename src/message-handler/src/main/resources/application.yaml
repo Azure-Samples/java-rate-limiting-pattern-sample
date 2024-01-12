@@ -12,3 +12,8 @@ servicebus:
     connectionString: ${SERVICE_BUS_CONNECTION_STRING}
     topicName: ${SERVICE_BUS_TOPIC_NAME}
     subscriptionName: ${SERVICE_BUS_SUBSCRIPTION_NAME}
+
+redis:
+    host: ${REDIS_HOST}
+    port: ${REDIS_PORT}
+    password: ${REDIS_PASSWORD}

@@ -15,6 +15,13 @@ spec:
       containers:
       - name: handler-service
         image: handler-service-image
+        resources:
+          limits:
+            cpu: "1"
+            memory: "1Gi"
+          requests:
+            cpu: "100m"
+            memory: "100Mi"
         env:
           - name: RATE_LIMITING_SERVICE_URL
             value: "http://rate-limiting-api:8081"
@@ -33,5 +40,14 @@ spec:
               secretKeyRef:
                 name: service-bus-secrets
                 key: SERVICE_BUS_SUBSCRIPTION_NAME
+          - name: REDIS_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                name: redis
+                key: redis-password
+          - name: REDIS_HOST
+            value: "redis-master.default.svc.cluster.local"
+          - name: REDIS_PORT
+            value: "6379"
           - name: AZURE_LOG_LEVEL
             value: "ERROR"

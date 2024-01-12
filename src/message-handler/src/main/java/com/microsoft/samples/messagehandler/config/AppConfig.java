@@ -16,4 +16,6 @@ public class AppConfig {
     private MessageBusConfig serviceBus;
 
     private String rateLimitingServiceUrl;
+
+    private RedisConfig redis;
 }

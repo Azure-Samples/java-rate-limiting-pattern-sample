@@ -2,7 +2,9 @@ package com.microsoft.samples.messagehandler;
 
 import com.azure.core.util.IterableStream;
 import com.azure.messaging.servicebus.*;
+import com.microsoft.samples.messagehandler.lock.LockService;
 
+import io.lettuce.core.RedisClient;
 import io.netty.handler.codec.http.HttpResponseStatus;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
@@ -11,6 +13,7 @@ import lombok.extern.slf4j.Slf4j;
 import java.net.http.HttpResponse;
 import java.time.Duration;
 
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.SmartLifecycle;
 import org.springframework.stereotype.Service;
 
@@ -29,8 +32,19 @@ public class MessageBusClientTopicProcessor implements SmartLifecycle {
     private final ApiClientBuilder apiClientBuilder;
     private boolean running;
 
+    private final String LOCK_PARTITION_1 = "topic-processor-lock-1";
+    private final String LOCK_PARTITION_2 = "topic-processor-lock-2";
+    private final String LOCK_PARTITION_3 = "topic-processor-lock-3";
+
+    private final int LOCK_DURATION_IN_SECONDS = 30;
+
+    private int rateLimitHits = 0;
+
+    @Autowired
+    private LockService lockService;
+
     public MessageBusClientTopicProcessor(MessageBusClientBuilder messageBusClientBuilder,
-            ApiClientBuilder apiClientBuilder) {
+            ApiClientBuilder apiClientBuilder, RedisClientBuilder redisClientBuilder) {
         log.info("Creating MessageBusClientTopicProcessor");
 
         this.apiClientBuilder = apiClientBuilder;
@@ -39,9 +53,10 @@ public class MessageBusClientTopicProcessor implements SmartLifecycle {
 
     private void processMessages(IterableStream<ServiceBusReceivedMessage> messages) {
         messages.forEach(message -> {
-            log.info("[TOPIC PROCESSOR: IN] Id #: {}, Sequence #: {}. Session: {}, Delivery Count: {}",
-                    message.getMessageId(), message.getSequenceNumber(), message.getSessionId(),
-                    message.getDeliveryCount());
+            // log.info("[TOPIC PROCESSOR: IN] Id #: {}, Sequence #: {}. Session: {},
+            // Delivery Count: {}",
+            // message.getMessageId(), message.getSequenceNumber(), message.getSessionId(),
+            // message.getDeliveryCount());
 
             try {
                 var httpClient = this.apiClientBuilder.buildApiClient();
@@ -53,22 +68,25 @@ public class MessageBusClientTopicProcessor implements SmartLifecycle {
 
                 if (responseStatusCode == HttpResponseStatus.TOO_MANY_REQUESTS.code()) {
 
-                    log.info("[TOPIC PROCESSOR: RATE LIMIT] Response: {}", responseBody);
-                    log.info("[TOPIC PROCESSOR: ABANDON] Id #: {}, Sequence #: {}. Session: {}, Delivery Count: {}",
-                            message.getMessageId(), message.getSequenceNumber(), message.getSessionId(),
-                            message.getDeliveryCount());
+                    // log.info("[TOPIC PROCESSOR: RATE LIMIT] Response: {}", responseBody);
+                    // log.info("[TOPIC PROCESSOR: ABANDON] Id #: {}, Sequence #: {}. Session: {},
+                    // Delivery Count: {}",
+                    // message.getMessageId(), message.getSequenceNumber(), message.getSessionId(),
+                    // message.getDeliveryCount());
 
+                    rateLimitHits++;
                     serviceBusReceiverClient.abandon(message);
 
                     return;
                 }
 
-                log.info("[RATE LIMITING API] Response: {}", responseBody);
+                // log.info("[RATE LIMITING API] Response: {}", responseBody);
 
-                log.info(
-                        "[TOPIC PROCESSOR: DONE] Completing message. Id #: {}, Sequence #: {}. Session: {}, Delivery Count: {}",
-                        message.getMessageId(), message.getSequenceNumber(), message.getSessionId(),
-                        message.getDeliveryCount());
+                // log.info(
+                // "[TOPIC PROCESSOR: DONE] Completing message. Id #: {}, Sequence #: {}.
+                // Session: {}, Delivery Count: {}",
+                // message.getMessageId(), message.getSequenceNumber(), message.getSessionId(),
+                // message.getDeliveryCount());
                 serviceBusReceiverClient.complete(message);
 
             } catch (Exception e) {
@@ -77,6 +95,9 @@ public class MessageBusClientTopicProcessor implements SmartLifecycle {
                 serviceBusReceiverClient.abandon(message);
             }
         });
+
+        log.info("[TOPIC PROCESSOR: COMPLETE] Completed processing messages");
+        log.info("[TOPIC PROCESSOR: RATE LIMIT] Hits: {}", rateLimitHits);
     }
 
     @PostConstruct
@@ -102,15 +123,53 @@ public class MessageBusClientTopicProcessor implements SmartLifecycle {
                 if (sessionAccepted) {
                     log.info("Topic Processor session accepted");
 
+                    log.info("Acquiring lock");
+
+                    var lockPartitions = new String[] { LOCK_PARTITION_1, LOCK_PARTITION_2, LOCK_PARTITION_3 };
+
+                    var lockAcquired = false;
+                    var partitionAcquired = "";
+
+                    while (lockAcquired == false) {
+                        for (var lockPartition : lockPartitions) {
+                            log.info("Acquiring lock for partition: {} for {} seconds", lockPartition,
+                                    LOCK_DURATION_IN_SECONDS);
+                            lockAcquired = lockService.acquire(lockPartition, LOCK_DURATION_IN_SECONDS);
+                            if (lockAcquired) {
+
+                                partitionAcquired = lockPartition;
+                                log.info("[TOPIC PROCESSOR: LOCKED] Lock acquired for partition: {} for {} seconds",
+                                        lockPartition,
+                                        LOCK_DURATION_IN_SECONDS);
+                                break;
+                            }
+
+                            log.info("Lock not acquired for partition: {}", lockPartition);
+                            log.info("Topic Processor waiting for 3 seconds to try another partition");
+
+                            try {
+                                Thread.sleep(Duration.ofSeconds(3).toMillis());
+                            } catch (InterruptedException e) {
+                                log.error("Topic Processor Sleep Exception: " + e.getMessage());
+                            }
+                        }
+                    }
+
                     log.info("Topic Processor waiting for messages");
                     var messages = serviceBusReceiverClient.receiveMessages(MAX_MESSAGE_COUNT);
                     log.info("Received {} messages", messages.stream().count());
                     processMessages(messages);
 
-                    log.info("Topic Processor closing to accept next session");
-
                     serviceBusReceiverClient.close();
                     sessionAccepted = false;
+
+                    log.info("Topic Processor closed to accept next session");
+                    log.info("Topic Processor releasing lock");
+
+                    // lockService.release(partitionAcquired);
+
+                    log.info("[TOPIC PROCESSOR: RELEASE] Lock released for partition: {}", partitionAcquired);
+
                 } else {
 
                     log.info("Topic Processor acquiring next session");
