@@ -22,7 +22,7 @@ public class LockService {
             if (locked) {
                 log.info("Lock acquired for {} seconds.", lockDurationInSeconds);
             } else {
-                log.info("Lock not acquired, resource is busy");
+                log.info("Lock not acquired, {} is busy", lockKey);
             }
 
             return locked;

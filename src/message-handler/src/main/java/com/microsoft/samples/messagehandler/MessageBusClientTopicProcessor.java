@@ -4,7 +4,6 @@ import com.azure.core.util.IterableStream;
 import com.azure.messaging.servicebus.*;
 import com.microsoft.samples.messagehandler.lock.LockService;
 
-import io.lettuce.core.RedisClient;
 import io.netty.handler.codec.http.HttpResponseStatus;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
@@ -25,7 +24,7 @@ import org.springframework.stereotype.Service;
  */
 public class MessageBusClientTopicProcessor implements SmartLifecycle {
 
-    private static final int MAX_MESSAGE_COUNT = 100;
+    private static final int MAX_MESSAGE_COUNT = 30;
     private final ServiceBusSessionReceiverClient serviceBusSessionReceiverClient;
     private ServiceBusReceiverClient serviceBusReceiverClient;
     private boolean sessionAccepted = false;
@@ -117,13 +116,13 @@ public class MessageBusClientTopicProcessor implements SmartLifecycle {
 
         while (running) {
 
-            log.info("Topic Processor waiting for session");
+            // log.info("Topic Processor waiting for session");
 
             try {
                 if (sessionAccepted) {
-                    log.info("Topic Processor session accepted");
+                    // log.info("Topic Processor session accepted");
 
-                    log.info("Acquiring lock");
+                    // log.info("Acquiring lock");
 
                     var lockPartitions = new String[] { LOCK_PARTITION_1, LOCK_PARTITION_2, LOCK_PARTITION_3 };
 
@@ -132,20 +131,21 @@ public class MessageBusClientTopicProcessor implements SmartLifecycle {
 
                     while (lockAcquired == false) {
                         for (var lockPartition : lockPartitions) {
-                            log.info("Acquiring lock for partition: {} for {} seconds", lockPartition,
-                                    LOCK_DURATION_IN_SECONDS);
+                            // log.info("Acquiring lock for partition: {} for {} seconds", lockPartition,
+                            // LOCK_DURATION_IN_SECONDS);
                             lockAcquired = lockService.acquire(lockPartition, LOCK_DURATION_IN_SECONDS);
                             if (lockAcquired) {
 
                                 partitionAcquired = lockPartition;
-                                log.info("[TOPIC PROCESSOR: LOCKED] Lock acquired for partition: {} for {} seconds",
-                                        lockPartition,
-                                        LOCK_DURATION_IN_SECONDS);
+                                // log.info("[TOPIC PROCESSOR: LOCKED] Lock acquired for partition: {} for {}
+                                // seconds",
+                                // lockPartition,
+                                // LOCK_DURATION_IN_SECONDS);
                                 break;
                             }
 
-                            log.info("Lock not acquired for partition: {}", lockPartition);
-                            log.info("Topic Processor waiting for 3 seconds to try another partition");
+                            // log.info("Lock not acquired for partition: {}", lockPartition);
+                            // log.info("Topic Processor waiting for 3 seconds to try another partition");
 
                             try {
                                 Thread.sleep(Duration.ofSeconds(3).toMillis());
@@ -157,18 +157,30 @@ public class MessageBusClientTopicProcessor implements SmartLifecycle {
 
                     log.info("Topic Processor waiting for messages");
                     var messages = serviceBusReceiverClient.receiveMessages(MAX_MESSAGE_COUNT);
-                    log.info("Received {} messages", messages.stream().count());
+                    var messageCount = messages.stream().count();
+                    log.info("Received {} messages", messageCount);
+
+                    long startTime = System.nanoTime();
+
                     processMessages(messages);
+
+                    long endTime = System.nanoTime();
+                    long duration = endTime - startTime;
+                    long seconds = duration / 1000000000;
+
+                    log.info("Topic Processor processing time: {} seconds for {} messages ({}messages/second)", seconds,
+                            messageCount, messageCount / seconds);
 
                     serviceBusReceiverClient.close();
                     sessionAccepted = false;
 
-                    log.info("Topic Processor closed to accept next session");
-                    log.info("Topic Processor releasing lock");
+                    // log.info("Topic Processor closed to accept next session");
+                    // log.info("Topic Processor releasing lock");
 
                     // lockService.release(partitionAcquired);
 
-                    log.info("[TOPIC PROCESSOR: RELEASE] Lock released for partition: {}", partitionAcquired);
+                    // log.info("[TOPIC PROCESSOR: RELEASE] Lock released for partition: {}",
+                    // partitionAcquired);
 
                 } else {
 
