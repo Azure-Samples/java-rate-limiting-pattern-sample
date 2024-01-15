@@ -26,8 +26,9 @@ public class MessageBusClientTopicProcessor implements SmartLifecycle {
 
     private static final int MAX_RATE_LIMIT_PER_MINUTE = 300;
     private static final int MAX_MESSAGE_COUNT = 30;
-    private final ServiceBusSessionReceiverClient serviceBusSessionReceiverClient;
+    private ServiceBusSessionReceiverClient serviceBusSessionReceiverClient;
     private ServiceBusReceiverClient serviceBusReceiverClient;
+    private MessageBusClientBuilder messageBusClientBuilder;
     private boolean sessionAccepted = false;
     private final ApiClientBuilder apiClientBuilder;
     private boolean running;
@@ -48,7 +49,8 @@ public class MessageBusClientTopicProcessor implements SmartLifecycle {
         log.info("Creating MessageBusClientTopicProcessor");
 
         this.apiClientBuilder = apiClientBuilder;
-        this.serviceBusSessionReceiverClient = messageBusClientBuilder.buildTopicReceiverClient();
+        this.messageBusClientBuilder = messageBusClientBuilder;
+        this.serviceBusSessionReceiverClient = this.messageBusClientBuilder.buildTopicReceiverClient();
     }
 
     private void processMessages(IterableStream<ServiceBusReceivedMessage> messages) {
@@ -118,6 +120,9 @@ public class MessageBusClientTopicProcessor implements SmartLifecycle {
         long startTime = 0;
         var totalMessages = 0;
         var timeStarted = false;
+
+        double maxRatePerSecond = 0;
+        double minRatePerSecond = 0;
 
         while (running) {
 
@@ -189,23 +194,52 @@ public class MessageBusClientTopicProcessor implements SmartLifecycle {
                     long duration = endTime - startTime;
                     long totalTimeInSeconds = duration / 1000000000;
 
+                    if (totalTimeInSeconds < 60) {
+                        // Waiting for 60 seconds to calculate rate
+                        continue;
+                    }
+
                     double messagesPerSecond = (double) totalMessages / totalTimeInSeconds;
                     double rateConsumed = (double) messagesPerSecond * 60 / MAX_RATE_LIMIT_PER_MINUTE * 100;
 
-                    log.info(
-                            "[RATE METER:] Total time passed: {} seconds, {} messages processed, RATE {} messages/second, ({} per minute), Rate defined: {} messages/minute, Rate consumed: {}",
-                            totalTimeInSeconds,
-                            totalMessages,
-                            String.format("%.1f", messagesPerSecond),
-                            String.format("%.1f", messagesPerSecond * 60),
-                            MAX_RATE_LIMIT_PER_MINUTE,
-                            String.format("%.1f", rateConsumed));
-
-                    if (totalTimeInSeconds >= 300) {
-                        log.info("[RATE METER:] 5 minutes period exceeded, resetting rate meter");
-                        startTime = System.nanoTime();
-                        totalMessages = 0;
+                    if (maxRatePerSecond < messagesPerSecond) {
+                        maxRatePerSecond = messagesPerSecond;
                     }
+
+                    if (minRatePerSecond > messagesPerSecond || minRatePerSecond == 0) {
+                        minRatePerSecond = messagesPerSecond;
+                    }
+
+                    double avgRatePerSecond = (maxRatePerSecond + minRatePerSecond) / 2;
+
+                    log.info("[RATE METER:] TOTAL time passed: {} seconds, {} messages processed", totalTimeInSeconds,
+                            totalMessages);
+
+                    log.info("[RATE METER:] RATE {} messages/second, ({} per minute)",
+                            String.format("%.1f", messagesPerSecond),
+                            String.format("%.1f", messagesPerSecond * 60));
+
+                    log.info("[RATE METER:] MIN RATE {} messages/second, ({} per minute)",
+                            String.format("%.1f", minRatePerSecond),
+                            String.format("%.1f", minRatePerSecond * 60));
+
+                    log.info("[RATE METER:] MAX RATE {} messages/second, ({} per minute)",
+                            String.format("%.1f", maxRatePerSecond),
+                            String.format("%.1f", maxRatePerSecond * 60));
+
+                    log.info("[RATE METER:] AVG RATE {} messages/second, ({} per minute)",
+                            String.format("%.1f", avgRatePerSecond),
+                            String.format("%.1f", avgRatePerSecond * 60));
+
+                    log.info("[RATE METER:] CONSUMPTION: {}% over {} messages/minute, ",
+                            String.format("%.1f", rateConsumed),
+                            MAX_RATE_LIMIT_PER_MINUTE);
+
+                    // if (totalTimeInSeconds >= 300) {
+                    // log.info("[RATE METER:] 5 minutes period exceeded, resetting rate meter");
+                    // startTime = System.nanoTime();
+                    // totalMessages = 0;
+                    // }
 
                 } else {
 
@@ -219,6 +253,12 @@ public class MessageBusClientTopicProcessor implements SmartLifecycle {
                 log.error("Topic Processor Session Accept Exception: " + e.getMessage());
 
                 lockService.release(partitionAcquired);
+
+                // Usually the exception after the timeout is:
+                // The receiver client is terminated. Re-create the client to continue receive
+                // attempt.
+
+                serviceBusSessionReceiverClient = messageBusClientBuilder.buildTopicReceiverClient();
 
                 try {
                     log.info("Topic Processor Session Accept Sleep for 3 seconds");
