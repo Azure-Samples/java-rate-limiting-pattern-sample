@@ -24,6 +24,7 @@ import org.springframework.stereotype.Service;
  */
 public class MessageBusClientTopicProcessor implements SmartLifecycle {
 
+    private static final int MAX_RATE_LIMIT_PER_MINUTE = 300;
     private static final int MAX_MESSAGE_COUNT = 30;
     private final ServiceBusSessionReceiverClient serviceBusSessionReceiverClient;
     private ServiceBusReceiverClient serviceBusReceiverClient;
@@ -114,9 +115,14 @@ public class MessageBusClientTopicProcessor implements SmartLifecycle {
         log.info("Topic Processor started");
         running = true;
 
+        long startTime = 0;
+        var totalMessages = 0;
+        var timeStarted = false;
+
         while (running) {
 
             // log.info("Topic Processor waiting for session");
+            var partitionAcquired = "";
 
             try {
                 if (sessionAccepted) {
@@ -124,10 +130,14 @@ public class MessageBusClientTopicProcessor implements SmartLifecycle {
 
                     // log.info("Acquiring lock");
 
+                    if (timeStarted == false) {
+                        startTime = System.nanoTime();
+                        timeStarted = true;
+                    }
+
                     var lockPartitions = new String[] { LOCK_PARTITION_1, LOCK_PARTITION_2, LOCK_PARTITION_3 };
 
                     var lockAcquired = false;
-                    var partitionAcquired = "";
 
                     while (lockAcquired == false) {
                         for (var lockPartition : lockPartitions) {
@@ -160,16 +170,7 @@ public class MessageBusClientTopicProcessor implements SmartLifecycle {
                     var messageCount = messages.stream().count();
                     log.info("Received {} messages", messageCount);
 
-                    long startTime = System.nanoTime();
-
                     processMessages(messages);
-
-                    long endTime = System.nanoTime();
-                    long duration = endTime - startTime;
-                    long seconds = duration / 1000000000;
-
-                    log.info("Topic Processor processing time: {} seconds for {} messages ({}messages/second)", seconds,
-                            messageCount, messageCount / seconds);
 
                     serviceBusReceiverClient.close();
                     sessionAccepted = false;
@@ -182,6 +183,30 @@ public class MessageBusClientTopicProcessor implements SmartLifecycle {
                     // log.info("[TOPIC PROCESSOR: RELEASE] Lock released for partition: {}",
                     // partitionAcquired);
 
+                    totalMessages += messageCount;
+
+                    long endTime = System.nanoTime();
+                    long duration = endTime - startTime;
+                    long totalTimeInSeconds = duration / 1000000000;
+
+                    double messagesPerSecond = (double) totalMessages / totalTimeInSeconds;
+                    double rateConsumed = (double) messagesPerSecond * 60 / MAX_RATE_LIMIT_PER_MINUTE * 100;
+
+                    log.info(
+                            "[RATE METER:] Total time passed: {} seconds, {} messages processed, RATE {} messages/second, ({} per minute), Rate defined: {} messages/minute, Rate consumed: {}",
+                            totalTimeInSeconds,
+                            totalMessages,
+                            String.format("%.1f", messagesPerSecond),
+                            String.format("%.1f", messagesPerSecond * 60),
+                            MAX_RATE_LIMIT_PER_MINUTE,
+                            String.format("%.1f", rateConsumed));
+
+                    if (totalTimeInSeconds >= 300) {
+                        log.info("[RATE METER:] 5 minutes period exceeded, resetting rate meter");
+                        startTime = System.nanoTime();
+                        totalMessages = 0;
+                    }
+
                 } else {
 
                     log.info("Topic Processor acquiring next session");
@@ -192,6 +217,8 @@ public class MessageBusClientTopicProcessor implements SmartLifecycle {
 
             } catch (Exception e) {
                 log.error("Topic Processor Session Accept Exception: " + e.getMessage());
+
+                lockService.release(partitionAcquired);
 
                 try {
                     log.info("Topic Processor Session Accept Sleep for 3 seconds");

@@ -14,13 +14,23 @@ Using **3 job processors** to read the records from the queue at a controlled ra
 
 The integration utilizes APIM policies for authentication, authorization, and message transformation. The policies include obtaining credentials using Managed Identity, setting the authorization header, specifying the content type in the request header, and optionally attaching metadata to the message. The message payload is set as the body of the message, and its content can be modified if necessary.
 
+### Rate Limiting
+
+There is a very basic `Rate Meter` implementation to track the number of messages processed in the last `5 minutes`. This is used to calculate the `messages per second` rate. The rate meter is reset roughly every `5 minutes`. Using this very basic `Rate Meter`, the handler service is measured to process messages at a specified rate, in this case, `~10 messages per seconds` up to `~15 messages per second`. 
+
+This is achieved by implementing a [Distributed Lock](https://redis.io/topics/distlock) using [Redis](https://redis.io/) and [Spring Integration](https://spring.io/projects/spring-integration). The lock is acquired before processing any messages for `30 seconds` and released after the processing is complete. There are `3 keys` created to represent `3 partitions` to adhere `300 messages per minute` rate. This ensures that only one handler service processes the messages within the `30 seconds lease` time and limiting the rate at which messages are processed to `~10 messages per second`. The lease time can be adjusted to increase or decrease the messages per second rate.
+
+If The rate-limited service cannot keep up with the incoming message rate, it only processes a subset of messages and the rejected messages will be abandoned. Abandoned messages are sent to the handler service again in the next session. This ensures that the service is not overwhelmed, and it prevents potential degradation of performance or service disruption. Also, service bus durability ensures that the messages are not lost. Abandoned messages are retired 10 times (default) and then put in the dead letter queue.
+
+> `~7 messages per seconds` with 3 instances could target `~1,260` messages. However, each instance refreshes the lease every `30 seconds`. Also, each instance refreshes the session on Service Bus which takes around `~5 seconds` and only pulls `30 messages` in each session. This is how `~7 messages per seconds` is achieved.
+
 ### Performance
 
 Load testing captured by Application Insights attached to APIM indicated that 100% of the messages were successfully sent to the Service Bus within approximately 1 minute. The latency metrics, as observed in Application Insights, showed a 95th percentile latency of 190ms and an average latency of 168ms.
 
 ![APIM Latency](./docs/images/apim-servicebus-appinsights.jpg)
 
-The selected approach offers a straightforward integration between APIM and Service Bus, providing a buffering and retry mechanism without the need for complex application logic. The Service Bus effectively absorbs backpressure from the rate-limited API, allowing for smooth processing. The message processor on the Service Bus side demonstrated the ability to handle a rate of ~77 messages per second, successfully processing ~4.6K messages in 1 minute without issues. Increasing the rate limit on mock API will increase the throughput while keeping the latency low accordingly.
+The selected approach offers a straightforward integration between APIM and Service Bus, providing a buffering and retry mechanism without the need for complex application logic. The Service Bus effectively absorbs backpressure from the rate-limited API, allowing for smooth processing. 
 
 ### Handling Backpressure
 
@@ -30,7 +40,7 @@ Here's how backpressure is handled in this context:
 
 **1. Service Bus Buffering and Retry Mechanism:** Service Bus, being a messaging service, inherently provides a buffering mechanism. When messages are sent from APIM to the Service Bus, they are stored in a queue. If the rate-limited service is temporarily unable to process messages at the rate they are arriving, the messages remain in the queue, creating a buffer. Service Bus also has a retry mechanism, attempting to send the messages to the processor sending to the rate-limited service again after a predefined interval if the processing initially fails.
 
-**2. Rate Limiting at the Service Level:** The rate-limited service is designed to process messages at a specified rate, in this case, 100 messages per minute according to the load testing findings. This rate limit acts as a form of backpressure. If the rate-limited service cannot keep up with the incoming message rate, it only processes a subset of messages, adhering to the defined rate. This ensures that the service is not overwhelmed, and it prevents potential degradation of performance or service disruption.
+**2. Rate Limiting at the Service Level:** The rate-limited service is designed to process messages at a specified rate, in this case, `300 messages per minute` according to the load testing findings. This rate limit acts as a form of backpressure. If the rate-limited service cannot keep up with the incoming message rate, it only processes a subset of messages, adhering to the defined rate. This ensures that the service is not overwhelmed, and it prevents potential degradation of performance or service disruption.
 
 **3. APIM Policies for Flow Control:** APIM policies are used to implement authentication, authorization, and message transformation before sending messages to the Service Bus. These policies can also be used to control the flow of messages. For example, policies can be configured to introduce delays between consecutive requests to the Service Bus, providing a form of backpressure to avoid overwhelming the downstream system. Also, message transformation, event schema validation, and other operations can be performed to ensure that the messages are in the correct format before being sent to the Service Bus.
 
