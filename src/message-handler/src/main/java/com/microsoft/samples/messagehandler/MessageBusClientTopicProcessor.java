@@ -4,6 +4,9 @@ import com.azure.core.util.IterableStream;
 import com.azure.messaging.servicebus.*;
 import com.microsoft.samples.messagehandler.lock.LockService;
 
+import io.micrometer.core.instrument.composite.CompositeMeterRegistry;
+import io.micrometer.core.annotation.Timed;
+import io.micrometer.core.instrument.Counter;
 import io.netty.handler.codec.http.HttpResponseStatus;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
@@ -32,6 +35,8 @@ public class MessageBusClientTopicProcessor implements SmartLifecycle {
     private boolean sessionAccepted = false;
     private final ApiClientBuilder apiClientBuilder;
     private boolean running;
+    private int totalMessages = 0;
+    private Counter totalMessagesCounter;
 
     private final String LOCK_PARTITION_1 = "topic-processor-lock-1";
     private final String LOCK_PARTITION_2 = "topic-processor-lock-2";
@@ -45,14 +50,20 @@ public class MessageBusClientTopicProcessor implements SmartLifecycle {
     private LockService lockService;
 
     public MessageBusClientTopicProcessor(MessageBusClientBuilder messageBusClientBuilder,
-            ApiClientBuilder apiClientBuilder, RedisClientBuilder redisClientBuilder) {
+            ApiClientBuilder apiClientBuilder, RedisClientBuilder redisClientBuilder,
+            CompositeMeterRegistry meterRegistry) {
         log.info("Creating MessageBusClientTopicProcessor");
 
         this.apiClientBuilder = apiClientBuilder;
         this.messageBusClientBuilder = messageBusClientBuilder;
         this.serviceBusSessionReceiverClient = this.messageBusClientBuilder.buildTopicReceiverClient();
+
+        totalMessagesCounter = Counter.builder("total_messages_processed")
+                .description("Number of messages processed from the queue")
+                .register(meterRegistry);
     }
 
+    @Timed(value = "processMessages", description = "Process messages from Service Bus", longTask = true)
     private void processMessages(IterableStream<ServiceBusReceivedMessage> messages) {
         messages.forEach(message -> {
             // log.info("[TOPIC PROCESSOR: IN] Id #: {}, Sequence #: {}. Session: {},
@@ -91,6 +102,8 @@ public class MessageBusClientTopicProcessor implements SmartLifecycle {
                 // message.getDeliveryCount());
                 serviceBusReceiverClient.complete(message);
 
+                totalMessagesCounter.increment();
+
             } catch (Exception e) {
                 log.error("[TOPIC PROCESSOR: EXCEPTION]: " + e.getMessage());
 
@@ -118,7 +131,6 @@ public class MessageBusClientTopicProcessor implements SmartLifecycle {
         running = true;
 
         long startTime = 0;
-        var totalMessages = 0;
         var timeStarted = false;
 
         double maxRatePerSecond = 0;

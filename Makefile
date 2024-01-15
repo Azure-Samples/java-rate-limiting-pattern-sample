@@ -35,9 +35,26 @@ setup-local-cluster: ## 🛠️ setup local cluster
 	echo "Starting local cluster setup"
 	minikube start -p rate-limiting-sample
 
-	echo "Deploying Redis"
 	helm repo add bitnami https://charts.bitnami.com/bitnami
+
+	echo "Deploying Redis"
 	helm install redis -n default --set architecture=standalone bitnami/redis
+
+	echo "Deploying Prometheus"
+	helm install prometheus -n default bitnami/kube-prometheus
+
+	echo "Deploy Service Monitor"
+	kubectl apply -f ./src/message-handler/k8s/monitor.yaml
+
+	echo "Done."
+
+destroy-local-cluster: ## 🛠️ destroy local cluster
+	echo "Starting local cluster destroy"
+	minikube delete -p rate-limiting-sample
+
+	helm uninstall redis -n default
+	helm uninstall prometheus -n default
+
 	echo "Done."
 
 setup-local-cluster-secret: ## 🛠️ setup local cluster secret
@@ -56,6 +73,12 @@ load-test-local: ## 📈 run load test
 	APIM_URL_QUERY=$$(az apim list --resource-group $$RESOURCE_GROUP_NAME --query "[0].gatewayUrl" --output tsv); \
 	echo "APIM URL: $$APIM_URL_QUERY is set for the load testing"; \
 	k6 run ./test/load-testing/topic-load-script.js -e APIM_URL="$$APIM_URL_QUERY"; \
+	echo "Done."
+
+
+local-dashboard: ## 📈 run local dashboard on http://localhost:9090
+	echo "Starting local dashboard on http://localhost:9090"
+	kubectl port-forward --namespace default svc/prometheus-kube-prometheus-prometheus 9090:9090
 	echo "Done."
 
 run-local: setup-local-env setup-local-cluster setup-local-cluster-secret deploy-local-cluster ## 🏡 run on local cluster

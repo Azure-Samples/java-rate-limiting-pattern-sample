@@ -1,4 +1,6 @@
 spring:
+    application:
+        name: spring-prometheus-demo
     config:
         activate:
             on-profile: sample
@@ -17,3 +19,15 @@ redis:
     host: ${REDIS_HOST}
     port: ${REDIS_PORT}
     password: ${REDIS_PASSWORD}
+
+# management:
+#   endpoints:
+#     web:
+#       exposure:
+#         include: health, metrics, shutdown, prometheus, loggers
+#   metrics:
+#     tags:
+#       application: ${spring.application.name}
+#     export:
+#       prometheus:
+#         enabled: true # Enable Prometheus metrics export

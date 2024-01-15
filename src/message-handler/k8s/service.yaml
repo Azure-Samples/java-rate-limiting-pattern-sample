@@ -3,7 +3,7 @@ kind: Deployment
 metadata:
   name: handler-service
 spec:
-  replicas: 3
+  replicas: 1
   selector:
     matchLabels:
       app: handler-service
