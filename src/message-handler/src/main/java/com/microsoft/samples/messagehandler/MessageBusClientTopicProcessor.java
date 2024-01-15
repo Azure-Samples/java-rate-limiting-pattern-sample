@@ -8,26 +8,27 @@ import io.micrometer.core.instrument.composite.CompositeMeterRegistry;
 import io.micrometer.core.annotation.Timed;
 import io.micrometer.core.instrument.Counter;
 import io.netty.handler.codec.http.HttpResponseStatus;
-import jakarta.annotation.PostConstruct;
-import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
 
 import java.net.http.HttpResponse;
 import java.time.Duration;
 
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.context.SmartLifecycle;
-import org.springframework.stereotype.Service;
+import org.springframework.boot.availability.AvailabilityChangeEvent;
+import org.springframework.boot.availability.ReadinessState;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.context.ApplicationListener;
+import org.springframework.context.event.EventListener;
+import org.springframework.stereotype.Component;
 
 @Slf4j
-@Service
+@Component
 /**
  * Implementing SmartLifecycle to start and stop the processor client.
  * https://github.com/Azure/azure-sdk-for-java/issues/29997
  */
-public class MessageBusClientTopicProcessor implements SmartLifecycle {
+public class MessageBusClientTopicProcessor implements ApplicationListener<ApplicationReadyEvent> {
 
-    private static final int MAX_RATE_LIMIT_PER_MINUTE = 300;
     private static final int MAX_MESSAGE_COUNT = 30;
     private ServiceBusSessionReceiverClient serviceBusSessionReceiverClient;
     private ServiceBusReceiverClient serviceBusReceiverClient;
@@ -35,8 +36,8 @@ public class MessageBusClientTopicProcessor implements SmartLifecycle {
     private boolean sessionAccepted = false;
     private final ApiClientBuilder apiClientBuilder;
     private boolean running;
-    private int totalMessages = 0;
     private Counter totalMessagesCounter;
+    private Counter rateLimitCounter;
 
     private final String LOCK_PARTITION_1 = "topic-processor-lock-1";
     private final String LOCK_PARTITION_2 = "topic-processor-lock-2";
@@ -58,52 +59,30 @@ public class MessageBusClientTopicProcessor implements SmartLifecycle {
         this.messageBusClientBuilder = messageBusClientBuilder;
         this.serviceBusSessionReceiverClient = this.messageBusClientBuilder.buildTopicReceiverClient();
 
-        // totalMessagesCounter = Counter.builder("total_messages_processed")
-        // .description("Number of messages processed from the queue")
-        // .register(meterRegistry);
-
         totalMessagesCounter = meterRegistry.counter("total_messages_processed");
+        rateLimitCounter = meterRegistry.counter("rate_limit_hits");
     }
 
     @Timed(value = "processMessages", description = "Process messages from Service Bus", longTask = true)
     private void processMessages(IterableStream<ServiceBusReceivedMessage> messages) {
         messages.forEach(message -> {
-            // log.info("[TOPIC PROCESSOR: IN] Id #: {}, Sequence #: {}. Session: {},
-            // Delivery Count: {}",
-            // message.getMessageId(), message.getSequenceNumber(), message.getSessionId(),
-            // message.getDeliveryCount());
-
             try {
                 var httpClient = this.apiClientBuilder.buildApiClient();
                 var request = this.apiClientBuilder.buildMessageRequest(message.getBody().toString());
 
                 var response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
-                var responseBody = response.body();
                 var responseStatusCode = response.statusCode();
 
                 if (responseStatusCode == HttpResponseStatus.TOO_MANY_REQUESTS.code()) {
 
-                    // log.info("[TOPIC PROCESSOR: RATE LIMIT] Response: {}", responseBody);
-                    // log.info("[TOPIC PROCESSOR: ABANDON] Id #: {}, Sequence #: {}. Session: {},
-                    // Delivery Count: {}",
-                    // message.getMessageId(), message.getSequenceNumber(), message.getSessionId(),
-                    // message.getDeliveryCount());
-
                     rateLimitHits++;
+                    rateLimitCounter.increment();
                     serviceBusReceiverClient.abandon(message);
 
                     return;
                 }
 
-                // log.info("[RATE LIMITING API] Response: {}", responseBody);
-
-                // log.info(
-                // "[TOPIC PROCESSOR: DONE] Completing message. Id #: {}, Sequence #: {}.
-                // Session: {}, Delivery Count: {}",
-                // message.getMessageId(), message.getSequenceNumber(), message.getSessionId(),
-                // message.getDeliveryCount());
                 serviceBusReceiverClient.complete(message);
-
                 totalMessagesCounter.increment();
 
             } catch (Exception e) {
@@ -117,46 +96,35 @@ public class MessageBusClientTopicProcessor implements SmartLifecycle {
         log.info("[TOPIC PROCESSOR: RATE LIMIT] Hits: {}", rateLimitHits);
     }
 
-    @PostConstruct
-    public void startProcessor() {
-
-    }
-
-    @PreDestroy
-    public void stopProcessor() {
-
-    }
-
     @Override
-    public void start() {
-        log.info("Topic Processor started");
+    public void onApplicationEvent(final ApplicationReadyEvent event) {
         running = true;
-
-        // runMessageProcessor();
+        log.info("Application ready event received, application running: {}", running);
     }
 
-    private void runMessageProcessor() {
-        long startTime = 0;
-        var timeStarted = false;
+    @EventListener
+    public void onEvent(AvailabilityChangeEvent<ReadinessState> event) {
+        log.info("Availability change event received, application running: {}, state {}", running, event.getState());
 
-        double maxRatePerSecond = 0;
-        double minRatePerSecond = 0;
+        if (event.getState() == ReadinessState.ACCEPTING_TRAFFIC) {
+            log.info("Topic Processor can start running");
+            runMessageProcessor();
+        }
+    }
+
+    public void runMessageProcessor() {
+        log.info("Topic Processor started, application running: {}", running);
 
         while (running) {
 
-            // log.info("Topic Processor waiting for session");
+            log.info("Topic Processor waiting for session");
             var partitionAcquired = "";
 
             try {
                 if (sessionAccepted) {
-                    // log.info("Topic Processor session accepted");
 
-                    // log.info("Acquiring lock");
-
-                    if (timeStarted == false) {
-                        startTime = System.nanoTime();
-                        timeStarted = true;
-                    }
+                    log.info("Topic Processor session accepted");
+                    log.info("Acquiring lock");
 
                     var lockPartitions = new String[] { LOCK_PARTITION_1, LOCK_PARTITION_2, LOCK_PARTITION_3 };
 
@@ -164,21 +132,16 @@ public class MessageBusClientTopicProcessor implements SmartLifecycle {
 
                     while (lockAcquired == false) {
                         for (var lockPartition : lockPartitions) {
-                            // log.info("Acquiring lock for partition: {} for {} seconds", lockPartition,
-                            // LOCK_DURATION_IN_SECONDS);
                             lockAcquired = lockService.acquire(lockPartition, LOCK_DURATION_IN_SECONDS);
                             if (lockAcquired) {
 
                                 partitionAcquired = lockPartition;
-                                // log.info("[TOPIC PROCESSOR: LOCKED] Lock acquired for partition: {} for {}
-                                // seconds",
-                                // lockPartition,
-                                // LOCK_DURATION_IN_SECONDS);
+                                log.info("[TOPIC PROCESSOR: LOCKED] Lock acquired for partition: {} for {} seconds",
+                                        lockPartition, LOCK_DURATION_IN_SECONDS);
                                 break;
                             }
 
-                            // log.info("Lock not acquired for partition: {}", lockPartition);
-                            // log.info("Topic Processor waiting for 3 seconds to try another partition");
+                            log.info("Topic Processor waiting for 3 seconds to try another partition");
 
                             try {
                                 Thread.sleep(Duration.ofSeconds(3).toMillis());
@@ -198,67 +161,6 @@ public class MessageBusClientTopicProcessor implements SmartLifecycle {
                     serviceBusReceiverClient.close();
                     sessionAccepted = false;
 
-                    // log.info("Topic Processor closed to accept next session");
-                    // log.info("Topic Processor releasing lock");
-
-                    // lockService.release(partitionAcquired);
-
-                    // log.info("[TOPIC PROCESSOR: RELEASE] Lock released for partition: {}",
-                    // partitionAcquired);
-
-                    totalMessages += messageCount;
-
-                    long endTime = System.nanoTime();
-                    long duration = endTime - startTime;
-                    long totalTimeInSeconds = duration / 1000000000;
-
-                    if (totalTimeInSeconds < 60) {
-                        // Waiting for 60 seconds to calculate rate
-                        continue;
-                    }
-
-                    double messagesPerSecond = (double) totalMessages / totalTimeInSeconds;
-                    double rateConsumed = (double) messagesPerSecond * 60 / MAX_RATE_LIMIT_PER_MINUTE * 100;
-
-                    if (maxRatePerSecond < messagesPerSecond) {
-                        maxRatePerSecond = messagesPerSecond;
-                    }
-
-                    if (minRatePerSecond > messagesPerSecond || minRatePerSecond == 0) {
-                        minRatePerSecond = messagesPerSecond;
-                    }
-
-                    double avgRatePerSecond = (maxRatePerSecond + minRatePerSecond) / 2;
-
-                    log.info("[RATE METER:] TOTAL time passed: {} seconds, {} messages processed", totalTimeInSeconds,
-                            totalMessages);
-
-                    log.info("[RATE METER:] RATE {} messages/second, ({} per minute)",
-                            String.format("%.1f", messagesPerSecond),
-                            String.format("%.1f", messagesPerSecond * 60));
-
-                    log.info("[RATE METER:] MIN RATE {} messages/second, ({} per minute)",
-                            String.format("%.1f", minRatePerSecond),
-                            String.format("%.1f", minRatePerSecond * 60));
-
-                    log.info("[RATE METER:] MAX RATE {} messages/second, ({} per minute)",
-                            String.format("%.1f", maxRatePerSecond),
-                            String.format("%.1f", maxRatePerSecond * 60));
-
-                    log.info("[RATE METER:] AVG RATE {} messages/second, ({} per minute)",
-                            String.format("%.1f", avgRatePerSecond),
-                            String.format("%.1f", avgRatePerSecond * 60));
-
-                    log.info("[RATE METER:] CONSUMPTION: {}% over {} messages/minute, ",
-                            String.format("%.1f", rateConsumed),
-                            MAX_RATE_LIMIT_PER_MINUTE);
-
-                    // if (totalTimeInSeconds >= 300) {
-                    // log.info("[RATE METER:] 5 minutes period exceeded, resetting rate meter");
-                    // startTime = System.nanoTime();
-                    // totalMessages = 0;
-                    // }
-
                 } else {
 
                     log.info("Topic Processor acquiring next session");
@@ -275,7 +177,6 @@ public class MessageBusClientTopicProcessor implements SmartLifecycle {
                 // Usually the exception after the timeout is:
                 // The receiver client is terminated. Re-create the client to continue receive
                 // attempt.
-
                 serviceBusSessionReceiverClient = messageBusClientBuilder.buildTopicReceiverClient();
 
                 try {
@@ -286,17 +187,5 @@ public class MessageBusClientTopicProcessor implements SmartLifecycle {
                 }
             }
         }
-    }
-
-    @Override
-    public void stop() {
-        log.info("Topic Processor closed");
-        serviceBusSessionReceiverClient.close();
-        running = false;
-    }
-
-    @Override
-    public boolean isRunning() {
-        return running;
     }
 }
