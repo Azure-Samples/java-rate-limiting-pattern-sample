@@ -282,3 +282,19 @@ To access Alertmanager from outside the cluster execute the following commands:
 echo "Alertmanager URL: http://127.0.0.1:9093/"
 kubectl port-forward --namespace default svc/prometheus-kube-prometheus-alertmanager 9093:9093
 ```
+
+### Local Grafana Instance
+
+Get the application URL by running these commands:
+
+```bash
+echo "Browse to <http://127.0.0.1:8080>"
+kubectl port-forward svc/grafana 8080:3000 &
+```
+
+Get the admin credentials:
+
+```bash
+echo "User: admin"
+echo "Password: $(kubectl get secret grafana-admin --namespace default -o jsonpath="{.data.GF_SECURITY_ADMIN_PASSWORD}" | base64 -d)"
+```

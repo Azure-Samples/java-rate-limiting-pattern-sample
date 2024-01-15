@@ -22,6 +22,8 @@ spec:
           requests:
             cpu: "100m"
             memory: "100Mi"
+        ports:
+          - containerPort: 8082
         env:
           - name: RATE_LIMITING_SERVICE_URL
             value: "http://rate-limiting-api:8081"
@@ -51,3 +53,19 @@ spec:
             value: "6379"
           - name: AZURE_LOG_LEVEL
             value: "ERROR"
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: handler-service
+  labels:
+    app: handler-service
+spec:
+  selector:
+    app: handler-service
+  ports:
+    - protocol: TCP
+      name: http-traffic
+      port: 8080
+      targetPort: 8082

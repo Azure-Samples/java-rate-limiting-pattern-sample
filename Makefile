@@ -43,6 +43,9 @@ setup-local-cluster: ## 🛠️ setup local cluster
 	echo "Deploying Prometheus"
 	helm install prometheus -n default bitnami/kube-prometheus
 
+	echo "Deploying Grafana"
+	helm install grafana -n default bitnami/grafana
+
 	echo "Deploy Service Monitor"
 	kubectl apply -f ./src/message-handler/k8s/monitor.yaml
 

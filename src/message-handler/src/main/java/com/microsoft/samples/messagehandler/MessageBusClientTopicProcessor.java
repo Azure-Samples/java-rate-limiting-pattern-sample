@@ -58,9 +58,11 @@ public class MessageBusClientTopicProcessor implements SmartLifecycle {
         this.messageBusClientBuilder = messageBusClientBuilder;
         this.serviceBusSessionReceiverClient = this.messageBusClientBuilder.buildTopicReceiverClient();
 
-        totalMessagesCounter = Counter.builder("total_messages_processed")
-                .description("Number of messages processed from the queue")
-                .register(meterRegistry);
+        // totalMessagesCounter = Counter.builder("total_messages_processed")
+        // .description("Number of messages processed from the queue")
+        // .register(meterRegistry);
+
+        totalMessagesCounter = meterRegistry.counter("total_messages_processed");
     }
 
     @Timed(value = "processMessages", description = "Process messages from Service Bus", longTask = true)
@@ -130,6 +132,10 @@ public class MessageBusClientTopicProcessor implements SmartLifecycle {
         log.info("Topic Processor started");
         running = true;
 
+        // runMessageProcessor();
+    }
+
+    private void runMessageProcessor() {
         long startTime = 0;
         var timeStarted = false;
 
