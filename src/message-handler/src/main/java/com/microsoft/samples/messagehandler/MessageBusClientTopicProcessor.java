@@ -29,7 +29,7 @@ import org.springframework.stereotype.Component;
  */
 public class MessageBusClientTopicProcessor implements ApplicationListener<ApplicationReadyEvent> {
 
-    private static final int MAX_MESSAGE_COUNT = 30;
+    private static final int MAX_MESSAGE_COUNT = 45;
     private ServiceBusSessionReceiverClient serviceBusSessionReceiverClient;
     private ServiceBusReceiverClient serviceBusReceiverClient;
     private MessageBusClientBuilder messageBusClientBuilder;
