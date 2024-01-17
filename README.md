@@ -95,7 +95,7 @@ Although the throughput of APIM to Service Bus transmission is higher than the t
 
 ### Summary
 
-This architecture provides a very high throughput system that can scale up to the limits of the Rate Limited API without complex application logic. It also provides a reliable integration between APIM and Service Bus, with a buffering and retry mechanism that ensures that messages are not lost. Out of ~4.6K messages with no messages in the dead letter queue. The Service Bus also provides a form of backpressure, absorbing the rate limit exposed from the Rate Limited API and preventing it from being overwhelmed.
+This architecture provides a very high throughput system that can scale up to the limits of the Rate Limited API without complex application logic. It also provides a reliable integration between APIM and Service Bus, with a buffering and retry mechanism that ensures that messages are not lost. Out of ~4.6K messages with no messages in the dead letter queue. The rate limiting implementation ensures that the Rate Limited API is not overwhelmed, preventing potential degradation of performance or service disruption. The Service Bus also provides a form of durability, absorbing the abandoned messages rejected from the Rate Limited API and preventing it them being lost.
 
 ### References
 
