@@ -8,21 +8,46 @@ The objective is to establish a reliable and efficient integration between Azure
 
 This sample involves configuring APIM to use Service Bus as the backend. Messages sent to the Service Bus are processed by a mock service which posts to a rate limited API. Load testing of this configuration involved sending approximately ~4.6K messages to APIM in 1 minute (~77 requests/second). APIM posted these messages to the Service Bus using Managed Identity with the Service Bus Sender role.
 
-Using **3 job processors** to read the records from the queue at a controlled rate of **100 messages per batch**, the messages consumed within the Rate Limited API's limits, **300 messages per minute**.
+Using **3 job processors** to read the records from the queue at a controlled rate of **45 messages per batch** with **30 seconds lease**, the messages are processed within the Rate Limited API's limits, **300 messages per minute**.
 
-![Load Test](./docs/images/4.74K-messages-3-replicas-300-bucket.jpg)
+![Load Test](./docs/images/rate-limit-applied.jpg)
 
 The integration utilizes APIM policies for authentication, authorization, and message transformation. The policies include obtaining credentials using Managed Identity, setting the authorization header, specifying the content type in the request header, and optionally attaching metadata to the message. The message payload is set as the body of the message, and its content can be modified if necessary.
 
 ### Rate Limiting
 
-There is a very basic `Rate Meter` implementation to track the number of messages processed in the last `5 minutes`. This is used to calculate the `messages per second` rate. The rate meter is reset roughly every `5 minutes`. Using this very basic `Rate Meter`, the handler service is measured to process messages at a specified rate, in this case, `~10 messages per seconds` up to `~15 messages per second`. 
+There is a very basic `Rate Meter` implementation to track the number of messages processed per minute or per second. Every time a message is processed, `totalMessagesCounter.increment();` is called using [Spring Actuator](https://docs.spring.io/spring-boot/docs/current/reference/html/actuator.html). [Prometheus](https://prometheus.io/) scraper collects these metrics and [Grafana](https://grafana.com/) dashboard visualizes the metrics.  
 
-This is achieved by implementing a [Distributed Lock](https://redis.io/topics/distlock) using [Redis](https://redis.io/) and [Spring Integration](https://spring.io/projects/spring-integration). The lock is acquired before processing any messages for `30 seconds` and released after the processing is complete. There are `3 keys` created to represent `3 partitions` to adhere `300 messages per minute` rate. This ensures that only one handler service processes the messages within the `30 seconds lease` time and limiting the rate at which messages are processed to `~10 messages per second`. The lease time can be adjusted to increase or decrease the messages per second rate.
+Messages per minute is visualized using using the following query:
 
-If The rate-limited service cannot keep up with the incoming message rate, it only processes a subset of messages and the rejected messages will be abandoned. Abandoned messages are sent to the handler service again in the next session. This ensures that the service is not overwhelmed, and it prevents potential degradation of performance or service disruption. Also, service bus durability ensures that the messages are not lost. Abandoned messages are retired 10 times (default) and then put in the dead letter queue.
+```bash
+sum(rate(total_messages_processed_total[1m])*60)
+```
 
-> `~7 messages per seconds` with 3 instances could target `~1,260` messages. However, each instance refreshes the lease every `30 seconds`. Also, each instance refreshes the session on Service Bus which takes around `~5 seconds` and only pulls `30 messages` in each session. This is how `~7 messages per seconds` is achieved.
+Also, we are collecting metrics from the rate limited API response if rate limit hit. This metrics is visualized using the following query:
+
+```bash
+avg(rate(rate_limit_hits_total[1m])*60)
+```
+
+#### Rate Limiting Implementation
+
+This is achieved by implementing a [Distributed Lock](https://redis.io/topics/distlock) using [Redis](https://redis.io/) and [Spring Integration](https://spring.io/projects/spring-integration). The lock is acquired before processing any messages for `30 seconds` and released after the processing is complete. In each lease, only `45 messages` are pulled in to process from Service Bus. Also, there are `3 keys` created to mimic `3 partitions` to adhere `300 messages per minute` rate for `3 instances` of the message handler service. This ensures that only one handler service processes the messages within the `30 seconds lease` time and limiting the rate at which messages are processed to `~1.5 messages per second`. The lease time can be adjusted to increase or decrease the messages per second rate.
+
+Using the following two parameters in message handler service, we can control the rate at which messages are processed:
+
+```bash
+private static final int MAX_MESSAGE_COUNT = 45;
+private static final int LEASE_TIME_IN_SECONDS = 30;
+```
+
+This approximates to `~1.5 messages per second` per instance. When 3 instances of the message handler service runs, we see approximately `~4.5 messages per second` processed. This is how `~300 messages per minute` is achieved.
+
+#### Exceeding Rate Limits
+
+If the rate-limited service cannot keep up with the incoming message rate, message handler service only processes a subset of messages and the rejected messages will be abandoned. Abandoned messages are sent to the handler service again in the next session by Service Bus. This ensures that the service is not overwhelmed, and it prevents potential degradation of performance or service disruption. Also, service bus durability ensures that the messages are not lost. Abandoned messages are retired 10 times (default) and then put in the dead letter queue.
+
+> `~4.5 messages per seconds` with 3 instances could target `~270 messages per minute`. However, each instance refreshes the lease every `30 seconds` and each instance refreshes the session on Service Bus which takes around `~5 seconds` and only pulls `45 messages` in each session. These integration latencies contributed to the overall throughput. The actual throughput can be different, most probably lower but not higher in a production system.
 
 ### Performance
 
@@ -30,7 +55,7 @@ Load testing captured by Application Insights attached to APIM indicated that 10
 
 ![APIM Latency](./docs/images/apim-servicebus-appinsights.jpg)
 
-The selected approach offers a straightforward integration between APIM and Service Bus, providing a buffering and retry mechanism without the need for complex application logic. The Service Bus effectively absorbs backpressure from the rate-limited API, allowing for smooth processing. 
+The selected approach offers a straightforward integration between APIM and Service Bus, providing a buffering and retry mechanism without the need for complex application logic. The Service Bus effectively absorbs backpressure from the rate-limited API, allowing for smooth processing.
 
 ### Handling Backpressure
 
@@ -64,7 +89,7 @@ This combined throughput is up to **4,000 messages/second** by scaling up the AP
 
 **4.End-to-End Throughput:** The overall throughput of the entire integration is a combination of the throughput of APIM to Service Bus transmission and the throughput of Service Bus message processing. It represents the system's ability to handle a specific volume of messages from the point of entry (APIM) to the point of processing (Rate Limited API).
 
-Although the throughput of APIM to Service Bus transmission is higher than the throughput of Service Bus message processing, the overall throughput is limited by the Rate Limited API throughput. While we can send up to **4,000 messages/second** from APIM to Service Bus, Rate Limited API can only process up to **4.6K messages/5 minutes**. This means that the overall throughput of the integration is limited to **~15 messages/second** with a rate limit of **300 messages per minute**.
+Although the throughput of APIM to Service Bus transmission is higher than the throughput of Service Bus message processing, the overall throughput is limited by the Rate Limited API throughput. While we can send up to **4,000 messages/second** from APIM to Service Bus, Rate Limited API can only process up to **1.5K messages/5 minutes**. This means that the overall throughput of the integration is limited to **~5 messages/second** with a rate limit of **300 messages per minute**.
 
 > The actual numbers in a production environment can be different, most probably lower but not higher.
 
