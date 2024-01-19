@@ -2,6 +2,8 @@
 
 The objective is to establish a reliable and efficient integration between Azure API Management (APIM) and Service Bus for processing messages in a rate-limited manner. The integration aims to leverage APIM policies for authentication, authorization, and message transformation before forwarding messages to the Service Bus. Processing these messages by a rate-limited service dependency is intended to mimic the the control the resources your system could consume, imposing limits on the rate at which other applications or services can access them.
 
+> 💡 This is an implementation of the [Rate Limiting pattern](https://learn.microsoft.com/azure/architecture/patterns/rate-limiting-pattern) described in the Azure Architecture Center.
+
 ![Architecture](./docs/images/architecture.drawio.png)
 
 ## Integrating Azure API Management (APIM) and Azure Service Bus
